@@ -132,7 +132,11 @@ export default (L, Plugin, Logger) => {
 
       const entityId = this.options.entity_id || this.options.entity;
       let data = await this._loadMowPathGeoJsonData(entityId);
-      if (!data) return;
+      if (!data) {
+        this._mowProgressInterval && clearInterval(this._mowProgressInterval);
+        Logger.warn("[GeoJsonLoader] No mow progress data to refresh");
+        return;
+      }
 
       data = JSON.parse(JSON.stringify(data));
 
