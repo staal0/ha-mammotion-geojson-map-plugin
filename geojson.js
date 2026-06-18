@@ -196,17 +196,19 @@ export default (L, Plugin, Logger) => {
 
     async _loadMowPathGeoJsonData(entityId) {
       try {
+        // Allow disabling the (potentially huge) mow-path layer entirely.
+        if (this.options.show_mow_path === false) return null;
         if (!entityId) {
           Logger.warn("[GeoJsonLoader] No entity_id provided in options");
           return null;
         }
         const hass = this._hass || this.hass;
-        
+
         const serviceData = {
           entity_id: entityId,
           return_response: true
         };
-        
+
         if (this.options.erase_by !== undefined) {
           serviceData.erase_by = this.options.erase_by;
         } else {
@@ -221,7 +223,16 @@ export default (L, Plugin, Logger) => {
           true,
           true
         );
-        return this.isEmpty(response?.response) ? null : response?.response;
+        const data = this.isEmpty(response?.response) ? null : response?.response;
+        if (!data) return null;
+
+        // Decimate the mow-path so render cost stays bounded as coverage grows
+        // (this is what otherwise freezes long-open browser tabs). Configurable
+        // via `mow_path_max_points` (default 1500; set 0 to disable thinning).
+        const maxPoints = this.options.mow_path_max_points != null
+          ? Number(this.options.mow_path_max_points)
+          : 1500;
+        return maxPoints > 0 ? this._decimateGeoJson(data, maxPoints) : data;
       } catch (error) {
         Logger.warn("[GeoJsonLoader] Load error (get_mow_progress_geojson): " + (error.message || error));
         return null;
@@ -436,7 +447,93 @@ export default (L, Plugin, Logger) => {
       return { lat: totalLat / count, lon: totalLon / count };
     }
 
+    /**
+     * Reduce the number of coordinates in a GeoJSON object so render cost stays
+     * bounded as the mower's coverage path grows. Subsamples positions within
+     * each line/ring (preserving endpoints and ring closure); if the data is
+     * instead made of many tiny features, drops whole features uniformly as a
+     * fallback. Aims for ~maxPoints total positions. Geometry-agnostic.
+     */
+    _decimateGeoJson(geojson, maxPoints) {
+      if (!geojson || !(maxPoints > 0)) return geojson;
 
+      const countPositions = (geom) => {
+        if (!geom) return 0;
+        if (geom.type === "GeometryCollection") {
+          return (geom.geometries || []).reduce((a, g) => a + countPositions(g), 0);
+        }
+        let n = 0;
+        const walk = (a) => {
+          if (!Array.isArray(a)) return;
+          if (typeof a[0] === "number") { n++; return; }
+          a.forEach(walk);
+        };
+        walk(geom.coordinates);
+        return n;
+      };
+
+      const features = geojson.type === "FeatureCollection" ? geojson.features
+        : geojson.type === "Feature" ? [geojson]
+        : [{ type: "Feature", geometry: geojson, properties: {} }];
+
+      const total = features.reduce((a, f) => a + countPositions(f.geometry), 0);
+      if (total <= maxPoints) return geojson;
+
+      const stride = Math.max(2, Math.ceil(total / maxPoints));
+
+      const thinLine = (line, minKeep) => {
+        if (!Array.isArray(line) || line.length <= minKeep) return line;
+        const out = [];
+        for (let i = 0; i < line.length; i += stride) out.push(line[i]);
+        const last = line[line.length - 1];
+        if (out[out.length - 1] !== last) out.push(last);
+        return out.length >= minKeep ? out : line;
+      };
+
+      const closeRing = (ring) => {
+        if (ring.length) {
+          const a = ring[0], b = ring[ring.length - 1];
+          if (a[0] !== b[0] || a[1] !== b[1]) ring.push(a);
+        }
+        return ring;
+      };
+
+      const thinGeom = (geom) => {
+        if (!geom) return geom;
+        switch (geom.type) {
+          case "LineString":
+            return { ...geom, coordinates: thinLine(geom.coordinates, 2) };
+          case "MultiLineString":
+            return { ...geom, coordinates: geom.coordinates.map(l => thinLine(l, 2)) };
+          case "Polygon":
+            return { ...geom, coordinates: geom.coordinates.map(r => closeRing(thinLine(r, 4))) };
+          case "MultiPolygon":
+            return { ...geom, coordinates: geom.coordinates.map(p => p.map(r => closeRing(thinLine(r, 4)))) };
+          case "GeometryCollection":
+            return { ...geom, geometries: geom.geometries.map(thinGeom) };
+          default:
+            return geom; // Point / MultiPoint: nothing to thin
+        }
+      };
+
+      let out = features.map(f => ({ ...f, geometry: thinGeom(f.geometry) }));
+
+      // Fallback for "many tiny features": if point-thinning didn't get us under
+      // the cap, drop whole features uniformly.
+      const newTotal = out.reduce((a, f) => a + countPositions(f.geometry), 0);
+      if (newTotal > maxPoints && out.length > 1) {
+        const fStride = Math.max(2, Math.ceil(newTotal / maxPoints));
+        const kept = out.filter((_, i) => i % fStride === 0);
+        Logger.debug(`[GeoJsonLoader] Decimated features ${out.length} -> ${kept.length}`);
+        out = kept;
+      }
+
+      Logger.debug(`[GeoJsonLoader] Decimated mow-path positions ~${total} (stride ${stride}, target ${maxPoints})`);
+
+      if (geojson.type === "FeatureCollection") return { ...geojson, features: out };
+      if (geojson.type === "Feature") return out[0];
+      return out[0].geometry;
+    }
 
     _getFeatureStyle(feature) {
       if (feature.geometry?.type === 'Point' && feature.properties?.iconImage) {
