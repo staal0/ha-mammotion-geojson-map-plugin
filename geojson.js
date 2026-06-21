@@ -650,6 +650,14 @@ export default (L, Plugin, Logger) => {
     }
 
     _rotatedMarkerPlugin() {
+      // Guard: this monkey-patches the shared L.Marker class. Running it more
+      // than once per page session re-wraps _setPos around the already-wrapped
+      // version (so _applyRotation fires N times per reposition) and stacks
+      // duplicate addInitHook 'drag' listeners — a cumulative CPU leak that
+      // froze long-open browser tabs. Patch L.Marker exactly once.
+      if (L.Marker.prototype._mammotionRotatePatched) return;
+      L.Marker.prototype._mammotionRotatePatched = true;
+
       // save these original methods before they are overwritten
       var proto_initIcon = L.Marker.prototype._initIcon;
       var proto_setPos = L.Marker.prototype._setPos;
