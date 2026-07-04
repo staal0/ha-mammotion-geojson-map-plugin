@@ -187,7 +187,16 @@ export default (L, Plugin, Logger) => {
           true,
           true
         );
-        return this.isEmpty(response?.response) ? null : response?.response;
+        const data = this.isEmpty(response?.response) ? null : response?.response;
+        if (!data) return null;
+
+        // The main geojson's `path` geometry is dense and rendered as dashed
+        // SVG polylines over two layers, which is what freezes the browser.
+        // Thin it like the mow-path. `geojson_max_points`: default 3000, 0 disables.
+        const maxPoints = this.options.geojson_max_points != null
+          ? Number(this.options.geojson_max_points)
+          : 3000;
+        return maxPoints > 0 ? this._decimateGeoJson(data, maxPoints) : data;
       } catch (error) {
         Logger.warn("[GeoJsonLoader] Load error (get_geojson): " + (error.message || error));
         return null;
@@ -516,11 +525,14 @@ export default (L, Plugin, Logger) => {
 
       let out = features.map(f => ({ ...f, geometry: thinGeom(f.geometry) }));
 
-      // Fallback for many tiny features: drop whole features uniformly.
+      // Fallback for many tiny features: drop whole features uniformly, but
+      // never point markers (dock/mower/labels) — only line/polygon geometry.
       const newTotal = out.reduce((a, f) => a + countPositions(f.geometry), 0);
       if (newTotal > maxPoints && out.length > 1) {
+        const isPoint = f => (f.geometry?.type || "").indexOf("Point") !== -1;
         const fStride = Math.max(2, Math.ceil(newTotal / maxPoints));
-        const kept = out.filter((_, i) => i % fStride === 0);
+        let seen = 0;
+        const kept = out.filter(f => isPoint(f) || (seen++ % fStride === 0));
         Logger.debug(`[GeoJsonLoader] Decimated features ${out.length} -> ${kept.length}`);
         out = kept;
       }
