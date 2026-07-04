@@ -226,9 +226,8 @@ export default (L, Plugin, Logger) => {
         const data = this.isEmpty(response?.response) ? null : response?.response;
         if (!data) return null;
 
-        // Decimate the mow-path so render cost stays bounded as coverage grows
-        // (this is what otherwise freezes long-open browser tabs). Configurable
-        // via `mow_path_max_points` (default 1500; set 0 to disable thinning).
+        // Cap the mow-path size so rendering can't freeze the browser as
+        // coverage grows. `mow_path_max_points`: default 1500, 0 disables.
         const maxPoints = this.options.mow_path_max_points != null
           ? Number(this.options.mow_path_max_points)
           : 1500;
@@ -448,11 +447,10 @@ export default (L, Plugin, Logger) => {
     }
 
     /**
-     * Reduce the number of coordinates in a GeoJSON object so render cost stays
-     * bounded as the mower's coverage path grows. Subsamples positions within
-     * each line/ring (preserving endpoints and ring closure); if the data is
-     * instead made of many tiny features, drops whole features uniformly as a
-     * fallback. Aims for ~maxPoints total positions. Geometry-agnostic.
+     * Thin a GeoJSON object down to ~maxPoints total positions so render cost
+     * stays bounded as coverage grows. Subsamples within each line/ring
+     * (keeping endpoints and ring closure), and falls back to dropping whole
+     * features uniformly for many-tiny-features data. Geometry-agnostic.
      */
     _decimateGeoJson(geojson, maxPoints) {
       if (!geojson || !(maxPoints > 0)) return geojson;
@@ -518,8 +516,7 @@ export default (L, Plugin, Logger) => {
 
       let out = features.map(f => ({ ...f, geometry: thinGeom(f.geometry) }));
 
-      // Fallback for "many tiny features": if point-thinning didn't get us under
-      // the cap, drop whole features uniformly.
+      // Fallback for many tiny features: drop whole features uniformly.
       const newTotal = out.reduce((a, f) => a + countPositions(f.geometry), 0);
       if (newTotal > maxPoints && out.length > 1) {
         const fStride = Math.max(2, Math.ceil(newTotal / maxPoints));
@@ -650,11 +647,9 @@ export default (L, Plugin, Logger) => {
     }
 
     _rotatedMarkerPlugin() {
-      // Guard: this monkey-patches the shared L.Marker class. Running it more
-      // than once per page session re-wraps _setPos around the already-wrapped
-      // version (so _applyRotation fires N times per reposition) and stacks
-      // duplicate addInitHook 'drag' listeners — a cumulative CPU leak that
-      // froze long-open browser tabs. Patch L.Marker exactly once.
+      // Patch the shared L.Marker class only once. Re-running re-wraps
+      // _setPos around the already-wrapped version and stacks duplicate
+      // 'drag' hooks, multiplying per-move work until the map freezes.
       if (L.Marker.prototype._mammotionRotatePatched) return;
       L.Marker.prototype._mammotionRotatePatched = true;
 
