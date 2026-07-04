@@ -23,7 +23,8 @@ Set these under the geojson plugin's `options` in your `ha-map-card` config:
 | `rotation_deg` | `0` | Rotate the rendered GeoJSON by this many degrees. |
 | `rotation_origin_lat` / `rotation_origin_lon` | auto (centroid) | Optional rotation origin. |
 | `erase_by` | `"progress"` | Passed to `get_mow_progress_geojson`. |
-| `mow_path_max_points` | `1500` | Caps the mow-path geometry to roughly this many positions by subsampling, so render cost stays bounded as coverage grows (prevents the browser freeze on long-open tabs). Set `0` to disable thinning and render the full path. |
+| `geojson_max_points` | `3000` | Caps the main GeoJSON (boundaries/zones/paths) to roughly this many positions by subsampling. Dense `path` geometry can cause slowdowns or freezes on some browsers; thinning it keeps render cost bounded. Set `0` to disable thinning. |
+| `mow_path_max_points` | `1500` | Caps the mow-path/coverage geometry to roughly this many positions by subsampling, so render cost stays bounded as coverage grows. Set `0` to disable thinning and render the full path. |
 | `show_mow_path` | `true` | Set `false` to skip the mow-path/coverage layer entirely (boundaries, zones, dock and mower marker still render). |
 
 Example:
